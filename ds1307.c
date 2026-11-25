@@ -1,78 +1,128 @@
 #include "ds1307.h"
 
 static uint8_t BinarytoBCD(uint8_t value);
+static uint8_t BCDtoBinary(uint8_t value);
+
 
 uint8_t DS1307_Init(I2C_Handle *handle)
 {
-	uint8_t data[] = {0x0, 0x0};
-	uint8_t rtn[1];
+    uint8_t reg = 0x00;
+    uint8_t rtn;
+    uint8_t data[2];
 
-	I2C_Transfer_Pol(handle, data, sizeof(data), DS1307_SLAVE_ADDR); //Enable clock
+    // Read seconds register
+    I2C_Transfer_Pol(handle, &reg, 1, DS1307_SLAVE_ADDR);
+    I2C_Receive_Pol(handle, &rtn, 1, DS1307_SLAVE_ADDR);
 
-	I2C_Transfer_Pol(handle, (uint8_t*)0x0, 1, DS1307_SLAVE_ADDR); //Send ptr
-	I2C_Receive_Pol(handle, rtn, 1, DS1307_SLAVE_ADDR); //Read clock state
+    // Clear CH bit without resetting seconds
+    data[0] = 0x00;
+    data[1] = rtn & 0x7F;
 
-	return rtn[0];
+    I2C_Transfer_Pol(handle, data, sizeof(data),
+                     DS1307_SLAVE_ADDR);
+
+    // Verify CH bit
+    I2C_Transfer_Pol(handle, &reg, 1, DS1307_SLAVE_ADDR);
+    I2C_Receive_Pol(handle, &rtn, 1, DS1307_SLAVE_ADDR);
+
+    return (rtn >> 7) & 0x01;
 }
+
 
 void DS1307_Set_Time(I2C_Handle *handle, DS1307_Time *time)
 {
-	uint8_t data[2];
+    uint8_t data[8];
 
-	//Send second
-	data[1] = BinarytoBCD(time->sec);
-	data[1] &= ~(0x1U << 7);
-	data[0] = 0x0U;
-	I2C_Transfer_Pol(handle, data, sizeof(data), DS1307_SLAVE_ADDR);
+    // Start register address
+    data[0] = 0x00;
 
-	//Send minute
-	data[1] = BinarytoBCD(time->min);
-	data[0] = 0x1U;
-	I2C_Transfer_Pol(handle, data, sizeof(data), DS1307_SLAVE_ADDR);
+    // Seconds - CH bit cleared
+    data[1] = BinarytoBCD(time->sec) & 0x7F;
 
-	//Send hour
-	data[1] = BinarytoBCD(time->hr);
-	if(time->timeFrmt == DS1307_Time_Format_24)
-		data[1] &= ~(0x1U << 6);
-	else
-	{
-		data[1] |= 0x1U << 6;
-		data[1] = (time->timeFrmt == DS1307_Time_Format_12PM) ? (data[1] | (0x1U << 5)) : (data[1] & ~(0x1U << 5));
-		data[0] = 0x2U;
-	}
-	I2C_Transfer_Pol(handle, data, sizeof(data), DS1307_SLAVE_ADDR);
+    // Minutes
+    data[2] = BinarytoBCD(time->min);
 
-	//Send day
-	data[1] = BinarytoBCD(time->day);
-	data[0] = 0x3U;
-	I2C_Transfer_Pol(handle, data, sizeof(data), DS1307_SLAVE_ADDR);
+    // Hours
+    data[3] = BinarytoBCD(time->hr);
 
-	//Send date
-	data[1] = BinarytoBCD(time->date);
-	data[0] = 0x4U;
-	I2C_Transfer_Pol(handle, data, sizeof(data), DS1307_SLAVE_ADDR);
+    if(time->timeFrmt == DS1307_Time_Format_24)
+    {
+        data[3] &= ~(1U << 6);
+    }
+    else
+    {
+        data[3] |= (1U << 6);
 
-	//Send mount
-	data[1] = BinarytoBCD(time->month);
-	data[0] = 0x5U;
-	I2C_Transfer_Pol(handle, data, sizeof(data), DS1307_SLAVE_ADDR);
+        if(time->timeFrmt == DS1307_Time_Format_12PM)
+        {
+            data[3] |= (1U << 5);
+        }
+        else
+        {
+            data[3] &= ~(1U << 5);
+        }
+    }
 
-	//Send year
-	data[1] = BinarytoBCD(time->year);
-	data[0] = 0x6U;
-	I2C_Transfer_Pol(handle, data, sizeof(data), DS1307_SLAVE_ADDR);
+    // Day, date, month and year
+    data[4] = BinarytoBCD(time->day);
+    data[5] = BinarytoBCD(time->date);
+    data[6] = BinarytoBCD(time->month);
+    data[7] = BinarytoBCD(time->year);
+
+    // Write all time registers
+    I2C_Transfer_Pol(handle, data, sizeof(data),
+                     DS1307_SLAVE_ADDR);
 }
+
+
+void DS1307_Get_Time(I2C_Handle *handle, DS1307_Time *time)
+{
+    uint8_t reg = 0x00;
+    uint8_t data[7];
+
+    // Set register pointer
+    I2C_Transfer_Pol(handle, &reg, 1, DS1307_SLAVE_ADDR);
+
+    // Read all time registers
+    I2C_Receive_Pol(handle, data, sizeof(data),
+                    DS1307_SLAVE_ADDR);
+
+    // Seconds
+    time->sec = BCDtoBinary(data[0] & 0x7F);
+
+    // Minutes
+    time->min = BCDtoBinary(data[1] & 0x7F);
+
+    // Hours
+    if(data[2] & (1U << 6))
+    {
+        time->timeFrmt = (data[2] & (1U << 5))
+                       ? DS1307_Time_Format_12PM
+                       : DS1307_Time_Format_12AM;
+
+        time->hr = BCDtoBinary(data[2] & 0x1F);
+    }
+    else
+    {
+        time->timeFrmt = DS1307_Time_Format_24;
+        time->hr = BCDtoBinary(data[2] & 0x3F);
+    }
+
+    // Day, date, month and year
+    time->day   = (DS1307_Day)(data[3] & 0x07);
+    time->date  = BCDtoBinary(data[4] & 0x3F);
+    time->month = BCDtoBinary(data[5] & 0x1F);
+    time->year  = BCDtoBinary(data[6]);
+}
+
 
 static uint8_t BinarytoBCD(uint8_t value)
 {
-	uint8_t a, b;
+    return ((value / 10) << 4) | (value % 10);
+}
 
-	if(value >= 10)
-	{
-		a = value / 10;
-		b = value % 10;
-		value = (a << 4) | b;
-	}
 
-	return value;
+static uint8_t BCDtoBinary(uint8_t value)
+{
+    return ((value >> 4) * 10) + (value & 0x0F);
 }

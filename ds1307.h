@@ -65,4 +65,9 @@ uint8_t DS1307_Init(I2C_Handle *handle);
  */
 void DS1307_Set_Time(I2C_Handle *handle, DS1307_Time *time);
 
+/**
+ * @brief DS1307 module get time API
+ */
+void DS1307_Get_Time(I2C_Handle *handle, DS1307_Time *time);
+
 #endif /* DS1307_H_ */
